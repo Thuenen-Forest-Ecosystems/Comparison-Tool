@@ -29,11 +29,11 @@ tfm_api_login <- function() {
   api_key <- Sys.getenv("TFM_API_KEY")
   email <- Sys.getenv("TFM_API_EMAIL")
   password <- Sys.getenv("TFM_API_PASSWORD")
-
+  
   if (base_url == "" || api_key == "" || email == "" || password == "") {
     stop("Missing tfm-api credentials. Set TFM_API_URL, TFM_API_KEY, TFM_API_EMAIL and TFM_API_PASSWORD in .env (see .env.example).")
   }
-
+  
   res <- POST(
     url = paste0(base_url, "auth/v1/token?grant_type=password"),
     add_headers(
@@ -43,18 +43,20 @@ tfm_api_login <- function() {
     body = list(email = email, password = password),
     encode = "json"
   )
-
+  
   stop_for_status(res, "log in to tfm-api")
-
+  
   content(res, as = "parsed", type = "application/json")$access_token
 }
 
 # Downloads the current record (properties = Aktuell) for a single
 # cluster_name/plot_name pair from tfm-api.
+# Downloads the current record (properties = Aktuell) for a single
+# cluster_name/plot_name pair from tfm-api.
 get_tfm_record <- function(cluster_name, plot_name, token = tfm_api_login()) {
   base_url <- Sys.getenv("TFM_API_URL")
   api_key <- Sys.getenv("TFM_API_KEY")
-
+  
   res <- GET(
     url = paste0(base_url, "rest/v1/records"),
     query = list(
@@ -69,11 +71,11 @@ get_tfm_record <- function(cluster_name, plot_name, token = tfm_api_login()) {
       "Accept-Profile" = "public"
     )
   )
-
+  
   stop_for_status(res, paste0("fetch record cluster_name=", cluster_name, " plot_name=", plot_name, " from tfm-api"))
-
+  
   raw <- content(res, as = "text", encoding = "UTF-8")
-
+  
   # Save the downloaded record to input/ for reference.
   input_path <- file.path(
     input_dir,
@@ -81,67 +83,62 @@ get_tfm_record <- function(cluster_name, plot_name, token = tfm_api_login()) {
   )
   writeLines(raw, input_path)
   message("Record saved to ", input_path)
-
+  
   records <- fromJSON(raw, simplifyVector = FALSE)
-
+  
   if (length(records) == 0) {
     stop(
       "No record found for cluster_name=", cluster_name,
       " plot_name=", plot_name, "."
     )
   }
-
+  
   records[[1]]
 }
 
 # Downloads the most recent record_changes entry (Historie) for a single
 # cluster_name/plot_name pair from tfm-api.
 # Returns NULL if no change has been archived yet.
-get_latest_record_change <- function(cluster_name, plot_name, token = tfm_api_login()) {
+get_latest_change_other_troop <- function(cluster_name,
+                                          plot_name,
+                                          own_troop,
+                                          token = tfm_api_login()) {
   base_url <- Sys.getenv("TFM_API_URL")
-  api_key <- Sys.getenv("TFM_API_KEY")
-
+  api_key  <- Sys.getenv("TFM_API_KEY")
   res <- GET(
     url = paste0(base_url, "rest/v1/record_changes"),
     query = list(
-      cluster_name = paste0("eq.", cluster_name),
-      plot_name = paste0("eq.", plot_name),
-      select = "properties,completed_at_troop,responsible_troop,created_at",
-      order = "created_at.desc",
-      limit = 1
+      cluster_name      = paste0("eq.", cluster_name),
+      plot_name         = paste0("eq.", plot_name),
+      responsible_troop = paste0("neq.", own_troop),   # <<< wichtig
+      select            = "properties,completed_at_troop,responsible_troop,created_at",
+      order             = "created_at.desc",
+      limit             = 1
     ),
     add_headers(
-      "apikey" = api_key,
-      "Authorization" = paste("Bearer", token),
-      "Accept" = "application/json",
+      "apikey"         = api_key,
+      "Authorization"  = paste("Bearer", token),
+      "Accept"         = "application/json",
       "Accept-Profile" = "public"
     )
   )
-
-  stop_for_status(res, paste0("fetch latest record change cluster_name=", cluster_name, " plot_name=", plot_name, " from tfm-api"))
-
+  stop_for_status(res,
+                  paste0("fetch latest change of other troop for ",
+                         "cluster=", cluster_name,
+                         " plot=", plot_name))
   raw <- content(res, as = "text", encoding = "UTF-8")
-
-  # Save the downloaded record change to input/ for reference.
-  input_path <- file.path(
-    input_dir,
-    paste0("record_change_", cluster_name, "_", plot_name, ".json")
-  )
-  writeLines(raw, input_path)
-  message("Record change saved to ", input_path)
-
+  writeLines(raw,
+             file.path(input_dir,
+                       sprintf("record_change_other_%s_%s.json",
+                               cluster_name, plot_name)))
   changes <- fromJSON(raw, simplifyVector = FALSE)
-
   if (length(changes) == 0) {
-    warning(
-      "No record_changes found for cluster_name=", cluster_name,
-      " plot_name=", plot_name, "; using empty history."
-    )
+    warning("Kein record_change eines anderen Trupps gefunden.")
     return(NULL)
   }
-
   changes[[1]]
 }
+
 
 # Record to compare ---------------------------------------------------------
 
@@ -162,7 +159,14 @@ plot_name <- prompt_integer("Trakteck-Nummer (plot_name)")
 token <- tfm_api_login()
 
 record <- get_tfm_record(cluster_name, plot_name, token)
-latest_change <- get_latest_record_change(cluster_name, plot_name, token)
+own_troop <- record$responsible_troop
+
+latest_change <- get_latest_change_other_troop(
+  cluster_name,
+  plot_name,
+  own_troop,
+  token)
+
 
 json_aktuell <- record$properties
 json_historie <- latest_change$properties
@@ -176,7 +180,7 @@ flatten_json <- function(x, parent = "") {
       )
     )
   }
-
+  
   if (!is.list(x)) {
     return(
       tibble(
@@ -185,10 +189,10 @@ flatten_json <- function(x, parent = "") {
       )
     )
   }
-
+  
   result <- purrr::map_dfr(seq_along(x), function(i) {
     nm <- names(x)[i]
-
+    
     if (is.null(nm) || nm == "") {
       new_parent <- paste0(parent, "[", i - 1, "]")
     } else if (parent == "") {
@@ -196,10 +200,10 @@ flatten_json <- function(x, parent = "") {
     } else {
       new_parent <- paste0(parent, ".", nm)
     }
-
+    
     flatten_json(x[[i]], new_parent)
   })
-
+  
   result
 }
 
@@ -235,25 +239,25 @@ wzp4_export <- safe_block(function() {
     mutate(
       Differenz = abs(coalesce(Aktuell_num, 0) - coalesce(Historie_num, 0))
     )
-
+  
   if (nrow(tree) == 0) {
     return(NULL)
   }
-
+  
   baumnummern <- tree %>%
     filter(Typ == "tree_number") %>%
     transmute(
       Baum_ID,
       Baumnummer = Aktuell_num
     )
-
+  
   dbh_grenzen <- tree %>%
     filter(Typ == "dbh") %>%
     transmute(
       Baum_ID,
       Distance_Grenze = Aktuell_num / 2 / 10
     )
-
+  
   tree <- tree %>%
     left_join(dbh_grenzen, by = "Baum_ID") %>%
     left_join(baumnummern, by = "Baum_ID") %>%
@@ -268,7 +272,7 @@ wzp4_export <- safe_block(function() {
         TRUE ~ NA
       )
     )
-
+  
   ergebnis <- tree %>%
     filter(OK == FALSE | is.na(OK)) %>%
     select(
@@ -282,17 +286,17 @@ wzp4_export <- safe_block(function() {
       Distance_Grenze,
       OK
     )
-
+  
   if (nrow(ergebnis) == 0) {
     return(NULL)
   }
-
+  
   wzp4_export <- ergebnis %>%
     mutate(
       Maske = "WZP4",
       Wert_KT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Aktuell_num),
       Wert_AT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Historie_num),
-      Unterschiede = Differenz,
+      Unterschiede = as.character(Differenz),
       Bemerkungen = ifelse(
         Typ == "distance",
         paste0("Grenzwert: ", round(Distance_Grenze, 2)),
@@ -306,44 +310,116 @@ wzp4_export <- safe_block(function() {
       Unterschiede,
       Bemerkungen
     )
-
+  
   wzp4_export$Maske[-1] <- ""
   wzp4_export
 })
 
-
+# WZP4 Eigenschaften
+wzp4_flags_export <- safe_block(function() {
+  
+  flags <- c(
+    "pruning",
+    "cave_tree",
+    "deprecated",
+    "bark_pocket",
+    "damage_dead",
+    "tree_marked",
+    "damage_other",
+    "damage_resin",
+    "within_stand",
+    "damage_beetle",
+    "damage_fungus",
+    "biotope_marked",
+    "damage_logging",
+    "crown_dead_wood",
+    "damage_peel_new",
+    "damage_peel_old",
+    "tree_top_drought"
+  )
+  
+  pattern <- paste0("tree\\[.*\\]\\.(", paste(flags, collapse = "|"), ")$")
+  
+  flag_tbl <- Vergleich_zwei %>%
+    filter(str_detect(Field, pattern)) %>%
+    mutate(
+      Baum_ID = str_extract(Field, "(?<=tree\\[)\\d+(?=\\])"),
+      Typ = str_extract(Field, paste(flags, collapse = "|"))
+    )
+  
+  if (nrow(flag_tbl) == 0) {
+    return(NULL)
+  }
+  
+  # tree_number separat holen (Baumnummer)
+  baumnummern <- Vergleich_zwei %>%
+    filter(str_detect(Field, "tree\\[.*\\]\\.tree_number$")) %>%
+    mutate(
+      Baum_ID = str_extract(Field, "(?<=tree\\[)\\d+(?=\\])"),
+      Baumnummer = suppressWarnings(as.numeric(Aktuell))
+    ) %>%
+    select(Baum_ID, Baumnummer)
+  
+  flag_tbl <- flag_tbl %>%
+    left_join(baumnummern, by = "Baum_ID") %>%
+    
+    mutate(
+      OK = case_when(
+        is.na(Aktuell) & is.na(Historie) ~ TRUE,
+        TRUE ~ Aktuell == Historie
+      )
+    ) %>%
+    filter(OK == FALSE | is.na(OK))
+  
+  if (nrow(flag_tbl) == 0) {
+    return(NULL)
+  }
+  
+  flag_export <- flag_tbl %>%
+    mutate(
+      Maske = "WZP4 Eigenschaften",
+      Wert_KT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Aktuell),
+      Wert_AT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Historie),
+      Unterschiede = "abweichend"
+    ) %>%
+    select(Maske, Wert_KT, Wert_AT, Unterschiede)
+  
+  flag_export$Maske[-1] <- ""
+  
+  flag_export
+})
 # Verjüngung Vergleich ----------------------------------------------------
 
 verjuengung_export <- safe_block(function() {
   regen <- Vergleich_zwei %>%
     filter(str_detect(Field, "^regeneration\\["))
-
+  
   if (nrow(regen) == 0) {
     return(NULL)
   }
-
+  
   regen <- regen %>%
     mutate(
       regeneration_id = str_extract(Field, "(?<=\\[)\\d+(?=\\])"),
       variable = sub("^.*\\]\\.", "", Field)
     )
-
+  
   aktuell_tbl <- regen %>%
     select(regeneration_id, variable, value = Aktuell) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   historie_tbl <- regen %>%
     select(regeneration_id, variable, value = Historie) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   # Sicherheitscheck: wenn Struktur fehlt → abbrechen
   required_cols <- c("tree_size_class", "tree_species", "tree_count")
-
+  
   if (!all(required_cols %in% names(aktuell_tbl)) &&
-    !all(required_cols %in% names(historie_tbl))) {
+      !all(required_cols %in% names(historie_tbl))) {
     return(NULL)
   }
-
+  
   vergleich <- full_join(
     aktuell_tbl %>%
       select(
@@ -364,12 +440,16 @@ verjuengung_export <- safe_block(function() {
         coalesce(as.numeric(Anzahl_KT), 0) -
           coalesce(as.numeric(Anzahl_AT), 0)
       )
-    )
-
+    )%>%
+    arrange(as.numeric(Größenklasse))
+  
+  vergleich <- vergleich %>%
+    filter(!(is.na(Größenklasse) & is.na(Baumart)))
+  
   if (nrow(vergleich) == 0) {
     return(NULL)
   }
-
+  
   verjuengung_export <- vergleich %>%
     mutate(
       Maske = "Verjüngung",
@@ -383,10 +463,10 @@ verjuengung_export <- safe_block(function() {
         " | ", Baumart,
         " | Anzahl:", Anzahl_AT
       ),
-      Unterschiede = Differenz
+      Unterschiede = as.character(Differenz)
     ) %>%
     select(Maske, Wert_KT, Wert_AT, Unterschiede)
-
+  
   verjuengung_export$Maske[-1] <- ""
   verjuengung_export
 })
@@ -399,69 +479,69 @@ safe_row <- function(x) {
     if (is.null(v)) {
       return(NA)
     }
-
+    
     if (length(v) == 0) {
       return(NA)
     }
-
+    
     if (is.list(v)) {
       return(as.character(v[[1]]))
     }
-
+    
     v
   })
-
+  
   tibble::as_tibble_row(cleaned)
 }
 
 deadwood_export <- safe_block(function() {
   if (is.null(json_historie$deadwood) &&
-    is.null(json_aktuell$deadwood)) {
+      is.null(json_aktuell$deadwood)) {
     return(NULL)
   }
   # ---------------------------
   # Historie
   # ---------------------------
-
+  
   if (is.null(json_historie$deadwood) ||
-    length(json_historie$deadwood) == 0) {
+      length(json_historie$deadwood) == 0) {
     dw1 <- tibble()
   } else {
     dw1 <- map_dfr(json_historie$deadwood, safe_row) %>%
       mutate(piece_id = row_number())
   }
-
+  
   # ---------------------------
   # Aktuell
   # ---------------------------
-
+  
   if (is.null(json_aktuell$deadwood) ||
-    length(json_aktuell$deadwood) == 0) {
+      length(json_aktuell$deadwood) == 0) {
     dw2 <- tibble()
   } else {
     dw2 <- map_dfr(json_aktuell$deadwood, safe_row) %>%
       mutate(piece_id = row_number())
   }
-
+  
   # Wenn gar kein Totholz vorhanden
-
+  
   if (nrow(dw1) == 0 && nrow(dw2) == 0) {
     return(NULL)
   }
-
+  
   # ---------------------------
   # Vergleich
   # ---------------------------
-
+  
   dw_compare <- full_join(
     dw1,
     dw2,
     by = "piece_id",
     suffix = c("_old", "_new")
   )
-
+  
   # Fehlende Spalten absichern
-
+  
   required <- c(
     "dead_wood_type_old",
     "dead_wood_type_new",
@@ -472,27 +552,27 @@ deadwood_export <- safe_block(function() {
     "length_height_old",
     "length_height_new"
   )
-
+  
   if (!all(required %in% names(dw_compare))) {
     return(NULL)
   }
-
+  
   dw_compare <- dw_compare %>%
     mutate(
       diff_butt =
         coalesce(as.numeric(diameter_butt_new), 0) -
-          coalesce(as.numeric(diameter_butt_old), 0),
+        coalesce(as.numeric(diameter_butt_old), 0),
       diff_top =
         coalesce(as.numeric(diameter_top_new), 0) -
-          coalesce(as.numeric(diameter_top_old), 0),
+        coalesce(as.numeric(diameter_top_old), 0),
       diff_length =
         coalesce(as.numeric(length_height_new), 0) -
-          coalesce(as.numeric(length_height_old), 0),
+        coalesce(as.numeric(length_height_old), 0),
       type_change =
         coalesce(as.character(dead_wood_type_old), "") !=
-          coalesce(as.character(dead_wood_type_new), "")
+        coalesce(as.character(dead_wood_type_new), "")
     )
-
+  
   deadwood_changes <- dw_compare %>%
     filter(
       type_change |
@@ -500,15 +580,15 @@ deadwood_export <- safe_block(function() {
         diff_top != 0 |
         diff_length != 0
     )
-
+  
   if (nrow(deadwood_changes) == 0) {
     return(NULL)
   }
-
+  
   # ---------------------------
   # Export
   # ---------------------------
-
+  
   deadwood_export <- deadwood_changes %>%
     mutate(
       Maske = "Totholz",
@@ -542,9 +622,9 @@ deadwood_export <- safe_block(function() {
       Unterschiede,
       Bemerkungen
     )
-
+  
   deadwood_export$Maske[-1] <- ""
-
+  
   deadwood_export
 })
 
@@ -554,30 +634,30 @@ deadwood_export <- safe_block(function() {
 bestockung_export <- safe_block(function() {
   bst <- Vergleich_zwei %>%
     filter(str_detect(Field, "^structure_lt4m\\["))
-
+  
   if (nrow(bst) == 0) {
     return(NULL)
   }
-
+  
   bst <- bst %>%
     mutate(
       id = str_extract(Field, "(?<=\\[)\\d+(?=\\])"),
       variable = sub("^.*\\]\\.", "", Field)
     )
-
+  
   aktuell_tbl <- bst %>%
     select(id, variable, value = Aktuell) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   historie_tbl <- bst %>%
     select(id, variable, value = Historie) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   if (!("tree_species" %in% names(aktuell_tbl)) &&
-    !("tree_species" %in% names(historie_tbl))) {
+      !("tree_species" %in% names(historie_tbl))) {
     return(NULL)
   }
-
+  
   vergleich <- full_join(
     aktuell_tbl,
     historie_tbl,
@@ -589,22 +669,22 @@ bestockung_export <- safe_block(function() {
           coalesce(as.numeric(coverage.y), 0)
       )
     )
-
+  
   if (nrow(vergleich) == 0) {
     return(NULL)
   }
-
+  
   bestockung_export <- vergleich %>%
     mutate(
       Maske = "Bestockung <4m",
       Wert_KT = paste0(tree_species, " | Anteil:", coverage.x),
       Wert_AT = paste0(tree_species, " | Anteil:", coverage.y),
-      Unterschiede = Differenz
+      Unterschiede = as.character(Differenz)
     ) %>%
     select(Maske, Wert_KT, Wert_AT, Unterschiede)
-
+  
   bestockung_export$Maske[-1] <- ""
-
+  
   bestockung_export
 })
 
@@ -613,30 +693,30 @@ bestockung_export <- safe_block(function() {
 bestockung_gt4m_export <- safe_block(function() {
   bst <- Vergleich_zwei %>%
     filter(str_detect(Field, "^structure_gt4m\\["))
-
+  
   if (nrow(bst) == 0) {
     return(NULL)
   }
-
+  
   bst <- bst %>%
     mutate(
       id = str_extract(Field, "(?<=\\[)\\d+(?=\\])"),
       variable = sub("^.*\\]\\.", "", Field)
     )
-
+  
   aktuell_tbl <- bst %>%
     select(id, variable, value = Aktuell) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   historie_tbl <- bst %>%
     select(id, variable, value = Historie) %>%
     pivot_wider(names_from = variable, values_from = value)
-
+  
   if (!("tree_species" %in% names(aktuell_tbl)) &&
-    !("tree_species" %in% names(historie_tbl))) {
+      !("tree_species" %in% names(historie_tbl))) {
     return(NULL)
   }
-
+  
   vergleich <- full_join(
     aktuell_tbl,
     historie_tbl,
@@ -648,23 +728,23 @@ bestockung_gt4m_export <- safe_block(function() {
           coalesce(as.numeric(count.y), 0)
       )
     )
-
+  
   if (nrow(vergleich) == 0) {
     return(NULL)
   }
-
+  
   bestockung_gt4m_export <- vergleich %>%
     mutate(
       Maske = "Bestockung >4m",
       Wert_KT = paste0(tree_species, " | Anzahl:", count.x),
       Wert_AT = paste0(tree_species, " | Anzahl:", count.y),
-      Unterschiede = Differenz
+      Unterschiede = as.character(Differenz)
     ) %>%
     select(Maske, Wert_KT, Wert_AT, Unterschiede)
-
-
+  
+  
   bestockung_gt4m_export$Maske[-1] <- ""
-
+  
   bestockung_gt4m_export
 })
 
@@ -688,6 +768,7 @@ at_personen <- first_or_na(latest_change$responsible_troop)
 
 export_df <- bind_rows(
   wzp4_export,
+  wzp4_flags_export,
   verjuengung_export,
   deadwood_export,
   bestockung_export,
