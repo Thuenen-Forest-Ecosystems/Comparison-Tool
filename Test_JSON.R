@@ -335,7 +335,8 @@ wzp4_flags_export <- safe_block(function() {
     "crown_dead_wood",
     "damage_peel_new",
     "damage_peel_old",
-    "tree_top_drought"
+    "tree_top_drought",
+    "stem_form"
   )
   
   pattern <- paste0("tree\\[.*\\]\\.(", paste(flags, collapse = "|"), ")$")
