@@ -51,3 +51,5 @@ rsconnect/
 
 input/*
 output/*
+
+.DS_Store
