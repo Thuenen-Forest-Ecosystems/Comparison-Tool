@@ -421,20 +421,44 @@ verjuengung_export <- safe_block(function() {
     return(NULL)
   }
   
+  aktuell_tbl2 <- aktuell_tbl %>%
+    select(
+      Größenklasse = tree_size_class,
+      Baumart = tree_species,
+      Verbiss = browsing,
+      Schälschaden = damage_peel,
+      Anzahl_KT = tree_count
+    )
+  
+  historie_tbl2 <- historie_tbl %>%
+    select(
+      Größenklasse = tree_size_class,
+      Baumart = tree_species,
+      Verbiss = browsing,
+      Schälschaden = damage_peel,
+      Anzahl_AT = tree_count
+    )
+  
+  join_cols <- c("Größenklasse", "Baumart")
+  
+  if ("Verbiss" %in% names(aktuell_tbl2) &&
+      ("Verbiss" %in% names(historie_tbl2)) &&
+      (any(!is.na(aktuell_tbl2$Verbiss)) ||
+       any(!is.na(historie_tbl2$Verbiss)))) {
+    join_cols <- c(join_cols, "Verbiss")
+  }
+  
+  if ("Schälschaden" %in% names(aktuell_tbl2) &&
+      ("Schälschaden" %in% names(historie_tbl2)) &&
+      (any(!is.na(aktuell_tbl2$Schälschaden)) ||
+       any(!is.na(historie_tbl2$Schälschaden)))) {
+    join_cols <- c(join_cols, "Schälschaden")
+  }
+  
   vergleich <- full_join(
-    aktuell_tbl %>%
-      select(
-        Größenklasse = tree_size_class,
-        Baumart = tree_species,
-        Anzahl_KT = tree_count
-      ),
-    historie_tbl %>%
-      select(
-        Größenklasse = tree_size_class,
-        Baumart = tree_species,
-        Anzahl_AT = tree_count
-      ),
-    by = c("Größenklasse", "Baumart")
+    aktuell_tbl2,
+    historie_tbl2,
+    by = join_cols
   ) %>%
     mutate(
       Differenz = abs(
@@ -457,11 +481,19 @@ verjuengung_export <- safe_block(function() {
       Wert_KT = paste0(
         "GK:", Größenklasse,
         " | ", Baumart,
+        if ("Verbiss" %in% names(.))
+          paste0(" | Verbiss:", Verbiss) else "",
+        if ("Schälschaden" %in% names(.))
+          paste0(" | Schälschaden:", Schälschaden) else "",
         " | Anzahl:", Anzahl_KT
       ),
       Wert_AT = paste0(
         "GK:", Größenklasse,
         " | ", Baumart,
+        if ("Verbiss" %in% names(.))
+          paste0(" | Verbiss:", Verbiss) else "",
+        if ("Schälschaden" %in% names(.))
+          paste0(" | Schälschaden:", Schälschaden) else "",
         " | Anzahl:", Anzahl_AT
       ),
       Unterschiede = as.character(Differenz)
@@ -471,6 +503,7 @@ verjuengung_export <- safe_block(function() {
   verjuengung_export$Maske[-1] <- ""
   verjuengung_export
 })
+
 
 
 # Totholz vergleich -------------------------------------------------------
