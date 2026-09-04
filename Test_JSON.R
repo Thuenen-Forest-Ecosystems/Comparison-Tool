@@ -231,7 +231,7 @@ Vergleich_zwei <- Vergleich_zwei %>%
 
 wzp4_export <- safe_block(function() {
   tree <- Vergleich_zwei %>%
-    filter(grepl("^tree\\[.*\\]\\.(dbh|tree_height|tree_number|distance)$", Field)) %>%
+    filter(grepl("^tree\\[.*\\]\\.(dbh|tree_height|tree_number|distance|tree_status)$", Field)) %>%
     mutate(
       Baum_ID = sub("^tree\\[(.*)\\]\\..*$", "\\1", Field),
       Typ     = sub(".*\\]\\.(.*)$", "\\1", Field)
@@ -267,6 +267,8 @@ wzp4_export <- safe_block(function() {
         Typ == "tree_height" ~ Differenz < 20,
         Typ == "tree_number" ~
           coalesce(Aktuell_num, 0) == coalesce(Historie_num, 0),
+        Typ == "tree_status" ~ 
+          coalesce(Aktuell_num, 0) == coalesce(Historie_num, 0),
         Typ == "distance" ~
           Differenz <= coalesce(Distance_Grenze, 0),
         TRUE ~ NA
@@ -296,7 +298,10 @@ wzp4_export <- safe_block(function() {
       Maske = "WZP4",
       Wert_KT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Aktuell_num),
       Wert_AT = paste0("Baum ", Baumnummer, " | ", Typ, " = ", Historie_num),
-      Unterschiede = as.character(Differenz),
+      Unterschiede = ifelse(
+        Typ == "tree_status",
+        "",
+        as.character(Differenz)),
       Bemerkungen = ifelse(
         Typ == "distance",
         paste0("Grenzwert: ", round(Distance_Grenze, 2)),
@@ -740,26 +745,37 @@ bestockung_gt4m_export <- safe_block(function() {
   
   aktuell_tbl <- bst %>%
     select(id, variable, value = Aktuell) %>%
-    pivot_wider(names_from = variable, values_from = value)
+    pivot_wider(
+      names_from = variable,
+      values_from = value
+    )
   
   historie_tbl <- bst %>%
     select(id, variable, value = Historie) %>%
-    pivot_wider(names_from = variable, values_from = value)
+    pivot_wider(
+      names_from = variable,
+      values_from = value
+    )
   
-  if (!("tree_species" %in% names(aktuell_tbl)) &&
-      !("tree_species" %in% names(historie_tbl))) {
+  # Sicherheitscheck
+  required_cols <- c("tree_species", "is_mirrored", "count")
+  
+  if (!all(required_cols %in% names(aktuell_tbl)) &&
+      !all(required_cols %in% names(historie_tbl))) {
     return(NULL)
   }
   
+  # Vergleich nach Baumart UND is_mirrored
   vergleich <- full_join(
     aktuell_tbl,
     historie_tbl,
-    by = "tree_species"
+    by = c("tree_species", "is_mirrored"),
+    suffix = c("_KT", "_AT")
   ) %>%
     mutate(
       Differenz = abs(
-        coalesce(as.numeric(count.x), 0) -
-          coalesce(as.numeric(count.y), 0)
+        coalesce(as.numeric(count_KT), 0) -
+          coalesce(as.numeric(count_AT), 0)
       )
     )
   
@@ -770,12 +786,24 @@ bestockung_gt4m_export <- safe_block(function() {
   bestockung_gt4m_export <- vergleich %>%
     mutate(
       Maske = "Bestockung >4m",
-      Wert_KT = paste0(tree_species, " | Anzahl:", count.x),
-      Wert_AT = paste0(tree_species, " | Anzahl:", count.y),
+      Wert_KT = paste0(
+        tree_species,
+        " | gespiegelt:", is_mirrored,
+        " | Anzahl:", count_KT
+      ),
+      Wert_AT = paste0(
+        tree_species,
+        " | gespiegelt:", is_mirrored,
+        " | Anzahl:", count_AT
+      ),
       Unterschiede = as.character(Differenz)
     ) %>%
-    select(Maske, Wert_KT, Wert_AT, Unterschiede)
-  
+    select(
+      Maske,
+      Wert_KT,
+      Wert_AT,
+      Unterschiede
+    )
   
   bestockung_gt4m_export$Maske[-1] <- ""
   
